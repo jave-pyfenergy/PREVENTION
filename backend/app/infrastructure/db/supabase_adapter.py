@@ -113,7 +113,7 @@ class SupabaseAdapter(RepositorioPort):
 
         result = (
             self._client.table("evaluaciones")
-            .select("id, fecha_creacion, nivel_inflamacion, probabilidad, imagen_path_temp")
+            .select("id, session_id, fecha_creacion, nivel_inflamacion, probabilidad, imagen_path_temp")
             .eq("user_id", str(user_id))
             .order("fecha_creacion", desc=True)
             .range(offset, offset + page_size - 1)
@@ -130,6 +130,7 @@ class SupabaseAdapter(RepositorioPort):
         items = [
             HistorialItem(
                 evaluacion_id=row["id"],
+                session_id=row["session_id"],
                 fecha=datetime.fromisoformat(row["fecha_creacion"]),
                 nivel_inflamacion=row.get("nivel_inflamacion", "desconocido"),
                 probabilidad=row.get("probabilidad", 0.0),
@@ -197,13 +198,29 @@ class SupabaseAdapter(RepositorioPort):
 
     @staticmethod
     def _mapear_evaluacion(data: dict) -> EvaluacionTemporal:
-        from uuid import UUID as _UUID
         evaluacion = EvaluacionTemporal(
-            id=_UUID(data["id"]),
+            id=UUID(data["id"]),
             session_id=data["session_id"],
-            user_id=_UUID(data["user_id"]) if data.get("user_id") else None,
+            user_id=UUID(data["user_id"]) if data.get("user_id") else None,
             imagen_path_temp=data.get("imagen_path_temp"),
         )
+        if data.get("fecha_creacion"):
+            evaluacion.fecha_creacion = datetime.fromisoformat(data["fecha_creacion"])
         if data.get("fecha_expiracion"):
             evaluacion.fecha_expiracion = datetime.fromisoformat(data["fecha_expiracion"])
+
+        # Reconstruct ResultadoML from denormalized columns
+        nivel_raw = data.get("nivel_inflamacion")
+        probabilidad = data.get("probabilidad")
+        confianza = data.get("confianza")
+        if nivel_raw is not None and probabilidad is not None and confianza is not None:
+            try:
+                evaluacion.resultado = ResultadoML(
+                    nivel_riesgo=NivelRiesgo(nivel_raw),
+                    probabilidad=float(probabilidad),
+                    confianza=float(confianza),
+                    gradcam_url=data.get("gradcam_url"),
+                )
+            except (ValueError, KeyError) as e:
+                logger.warning("No se pudo reconstruir ResultadoML", exc_info=e)
         return evaluacion

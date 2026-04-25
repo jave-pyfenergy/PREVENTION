@@ -95,5 +95,7 @@ export function useHistorial({ page = 1, pageSize = 20 } = {}) {
     queryKey: ['historial', page, pageSize],
     queryFn: () =>
       apiClient.get('/api/v1/historial', { page, page_size: pageSize }),
+    staleTime: 60_000,
+    retry: 1,
   })
 }

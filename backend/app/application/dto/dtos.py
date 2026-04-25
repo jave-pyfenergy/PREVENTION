@@ -118,6 +118,7 @@ class PacienteDTO(BaseModel):
 
 class HistorialItem(BaseModel):
     evaluacion_id: UUID
+    session_id: str
     fecha: datetime
     nivel_inflamacion: str
     probabilidad: float
