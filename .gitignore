@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+.venv/
+venv/
+.env
+!.env.example
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Node
+node_modules/
+dist/
+.vite/
+*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfplan
+*.tfvars
+!*.tfvars.example
+
+# Modelos ML (demasiado grandes para git)
+backend/models/*.pkl
+backend/models/*.onnx
+backend/models/*.tflite
+
+# Docker
+docker-compose.override.yml

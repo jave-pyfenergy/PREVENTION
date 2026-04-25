@@ -1,0 +1,126 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Design tokens PrevencionApp ─────────────────────────────────────────── */
+:root {
+  /* Paleta médica — azul profundo + verde salud + neutros */
+  --color-primary: #0f4c81;        /* Azul médico profundo */
+  --color-primary-light: #1a6bb5;
+  --color-primary-dark: #083460;
+  --color-secondary: #0d9488;      /* Verde salud */
+  --color-secondary-light: #14b8a6;
+  --color-accent: #f59e0b;         /* Ámbar advertencia */
+
+  /* Niveles de riesgo */
+  --color-riesgo-bajo: #22c55e;
+  --color-riesgo-moderado: #f59e0b;
+  --color-riesgo-alto: #ef4444;
+  --color-riesgo-critico: #7c3aed;
+
+  /* Neutrales */
+  --color-surface: #f8fafc;
+  --color-border: #e2e8f0;
+  --color-text: #1e293b;
+  --color-text-muted: #64748b;
+
+  /* Tipografía */
+  --font-display: 'Outfit', system-ui, sans-serif;
+  --font-body: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /* Espaciado */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1.25rem;
+  --radius-xl: 2rem;
+
+  /* Sombras */
+  --shadow-card: 0 4px 24px rgba(15, 76, 129, 0.08);
+  --shadow-elevated: 0 8px 40px rgba(15, 76, 129, 0.14);
+}
+
+/* ── Base styles ─────────────────────────────────────────────────────────── */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-body);
+  color: var(--color-text);
+  background-color: var(--color-surface);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+/* ── Componentes de utilidad ─────────────────────────────────────────────── */
+@layer components {
+  .btn-primary {
+    @apply bg-blue-800 text-white font-semibold px-6 py-3 rounded-xl
+           hover:bg-blue-900 active:scale-[0.98] transition-all duration-150
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply bg-teal-600 text-white font-semibold px-6 py-3 rounded-xl
+           hover:bg-teal-700 active:scale-[0.98] transition-all duration-150
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-outline {
+    @apply border-2 border-blue-800 text-blue-800 font-semibold px-6 py-3 rounded-xl
+           hover:bg-blue-50 active:scale-[0.98] transition-all duration-150;
+  }
+
+  .card {
+    @apply bg-white rounded-2xl border border-slate-100 p-6;
+    box-shadow: var(--shadow-card);
+  }
+
+  .input-field {
+    @apply w-full border border-slate-200 rounded-xl px-4 py-3 text-sm
+           focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
+           transition-all duration-150 bg-white;
+  }
+
+  .label {
+    @apply block text-sm font-medium text-slate-700 mb-1.5;
+  }
+
+  .badge-riesgo-bajo     { @apply bg-green-100 text-green-800 border border-green-200; }
+  .badge-riesgo-moderado { @apply bg-amber-100 text-amber-800 border border-amber-200; }
+  .badge-riesgo-alto     { @apply bg-red-100 text-red-800 border border-red-200; }
+  .badge-riesgo-critico  { @apply bg-purple-100 text-purple-800 border border-purple-200; }
+}
+
+/* ── Animaciones ─────────────────────────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
+}
+
+.animate-fade-in { animation: fadeIn 0.35s ease-out forwards; }
+.animate-pulse-soft { animation: pulse-soft 2s ease-in-out infinite; }
+
+/* ── Progress bar para upload ────────────────────────────────────────────── */
+.progress-bar {
+  @apply h-2 bg-slate-200 rounded-full overflow-hidden;
+}
+.progress-bar-fill {
+  @apply h-full bg-blue-600 rounded-full transition-all duration-300 ease-out;
+}

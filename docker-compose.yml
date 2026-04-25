@@ -1,0 +1,72 @@
+version: "3.9"
+
+services:
+  # ── Backend FastAPI ──────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      target: runtime
+    container_name: prevencion_api
+    ports:
+      - "8080:8080"
+    environment:
+      APP_ENV: development
+      LOG_LEVEL: DEBUG
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET}
+      GCP_PROJECT_ID: prevencion-app-dev
+      ML_MODEL_PATH: /app/models/model.pkl
+      CORS_ORIGINS: "http://localhost:5173,http://localhost:3000"
+    volumes:
+      - ./backend/app:/app/app:ro
+      - ./backend/models:/app/models:ro
+    command:
+      - "uvicorn"
+      - "app.entrypoints.api.main:app"
+      - "--reload"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── Frontend React + Vite ────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: prevencion_frontend
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_SUPABASE_URL: ${SUPABASE_URL}
+      VITE_SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+      VITE_API_BASE_URL: http://localhost:8080
+      VITE_APP_ENV: development
+    volumes:
+      - ./frontend/src:/app/src:ro
+    depends_on:
+      - api
+
+  # ── Redis (caché ML — Fase 3) ─────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: prevencion_redis
+    ports:
+      - "6379:6379"
+    command: redis-server --save "" --maxmemory 128mb --maxmemory-policy allkeys-lru
+
+volumes:
+  redis_data:
+
+networks:
+  default:
+    name: prevencion_network

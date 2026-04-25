@@ -1,0 +1,4 @@
+project_id = "prevencion-app-prod"
+region     = "europe-west1"
+env        = "production"
+app_image  = "gcr.io/prevencion-app-prod/prevencion-api:latest"

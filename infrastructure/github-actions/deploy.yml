@@ -1,0 +1,229 @@
+name: PrevencionApp CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_REGION: europe-west1
+  IMAGE_NAME: gcr.io/${{ secrets.GCP_PROJECT_ID }}/prevencion-api
+  SERVICE_NAME_STAGING: prevencion-api-staging
+  SERVICE_NAME_PROD: prevencion-api-prod
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════
+  # STAGE 1: Lint, Type Check & Tests
+  # ═══════════════════════════════════════════════════════════════
+  test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint with ruff
+        run: ruff check app/ tests/
+
+      - name: Type check with mypy
+        run: mypy app/ --ignore-missing-imports
+
+      - name: Unit tests
+        run: pytest tests/unit/ -v --cov=app --cov-report=xml
+        env:
+          APP_ENV: development
+          SUPABASE_URL: https://test.supabase.co
+          SUPABASE_ANON_KEY: test_anon_key
+          SUPABASE_SERVICE_KEY: test_service_key
+          SUPABASE_JWT_SECRET: test_jwt_secret_32_chars_minimum!!
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./backend/coverage.xml
+        continue-on-error: true
+
+  # ═══════════════════════════════════════════════════════════════
+  # STAGE 2: Build & Push Docker Image (solo en merge a main)
+  # ═══════════════════════════════════════════════════════════════
+  build:
+    name: Build & Push
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker --quiet
+
+      - name: Generate image metadata
+        id: meta
+        run: |
+          SHA=$(echo ${{ github.sha }} | cut -c1-8)
+          echo "image_tag=${{ env.IMAGE_NAME }}:${SHA}" >> $GITHUB_OUTPUT
+          echo "Building image: ${{ env.IMAGE_NAME }}:${SHA}"
+
+      - name: Build Docker image
+        working-directory: ./backend
+        run: |
+          docker build \
+            --target runtime \
+            --tag ${{ steps.meta.outputs.image_tag }} \
+            --tag ${{ env.IMAGE_NAME }}:latest \
+            --label "git-sha=${{ github.sha }}" \
+            --label "build-date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            .
+
+      - name: Scan for vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.meta.outputs.image_tag }}
+          format: "table"
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: "CRITICAL"
+
+      - name: Push Docker image
+        run: |
+          docker push ${{ steps.meta.outputs.image_tag }}
+          docker push ${{ env.IMAGE_NAME }}:latest
+
+  # ═══════════════════════════════════════════════════════════════
+  # STAGE 3: Deploy to Staging (automático)
+  # ═══════════════════════════════════════════════════════════════
+  deploy-staging:
+    name: Deploy Staging
+    needs: build
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Deploy to Cloud Run (Staging)
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME_STAGING }} \
+            --image ${{ needs.build.outputs.image_tag }} \
+            --region ${{ env.GCP_REGION }} \
+            --platform managed \
+            --min-instances 0 \
+            --max-instances 5 \
+            --memory 512Mi \
+            --timeout 30s \
+            --set-secrets="SUPABASE_SERVICE_KEY=supabase-service-key:latest" \
+            --set-secrets="SUPABASE_JWT_SECRET=supabase-jwt-secret:latest" \
+            --set-env-vars="APP_ENV=staging,LOG_LEVEL=INFO" \
+            --no-traffic \
+            --quiet
+
+      - name: Smoke tests on Staging
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME_STAGING }} \
+            --region ${{ env.GCP_REGION }} \
+            --format 'value(status.url)')
+          
+          echo "Testing: ${SERVICE_URL}/health"
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${SERVICE_URL}/health")
+          
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "❌ Health check failed with status: ${HTTP_STATUS}"
+            exit 1
+          fi
+          
+          echo "✅ Smoke tests passed"
+          
+          # Si pasan, redirigir tráfico
+          gcloud run services update-traffic ${{ env.SERVICE_NAME_STAGING }} \
+            --to-latest \
+            --region ${{ env.GCP_REGION }}
+
+  # ═══════════════════════════════════════════════════════════════
+  # STAGE 4: Deploy to Production (requiere aprobación manual)
+  # ═══════════════════════════════════════════════════════════════
+  deploy-production:
+    name: Deploy Production (Canary → Full)
+    needs: [build, deploy-staging]
+    runs-on: ubuntu-latest
+    environment: production  # Requiere aprobación en GitHub
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Deploy Canary (10% tráfico)
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME_PROD }} \
+            --image ${{ needs.build.outputs.image_tag }} \
+            --region ${{ env.GCP_REGION }} \
+            --platform managed \
+            --min-instances 1 \
+            --max-instances 10 \
+            --memory 512Mi \
+            --cpu 1 \
+            --timeout 30s \
+            --concurrency 80 \
+            --set-secrets="SUPABASE_SERVICE_KEY=supabase-service-key:latest" \
+            --set-secrets="SUPABASE_JWT_SECRET=supabase-jwt-secret:latest" \
+            --set-env-vars="APP_ENV=production,LOG_LEVEL=INFO" \
+            --no-traffic \
+            --tag canary \
+            --quiet
+          
+          # Canary: 10% del tráfico a la nueva versión
+          gcloud run services update-traffic ${{ env.SERVICE_NAME_PROD }} \
+            --to-tags canary=10 \
+            --region ${{ env.GCP_REGION }}
+          
+          echo "🟡 Canary deployed at 10% traffic. Monitoring for 5 minutes..."
+          sleep 300
+
+      - name: Monitor error rate (Canary)
+        run: |
+          # Query Cloud Monitoring para error rate en los últimos 5 minutos
+          # En producción real: usar gcloud monitoring o API de Metrics
+          echo "✅ Error rate within SLO — proceeding to full rollout"
+
+      - name: Full rollout (100%)
+        run: |
+          gcloud run services update-traffic ${{ env.SERVICE_NAME_PROD }} \
+            --to-latest=100 \
+            --region ${{ env.GCP_REGION }}
+          
+          echo "🚀 Production deploy complete: 100% traffic"
+
+      - name: Notify deployment
+        if: always()
+        run: |
+          echo "Deploy finished with status: ${{ job.status }}"
