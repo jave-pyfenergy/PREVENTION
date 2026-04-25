@@ -33,8 +33,8 @@ class VincularEvaluacion:
         self._storage = storage
 
     async def ejecutar(self, request: RequestVincularEvaluacion) -> None:
-        evaluacion = await self._repo.obtener_evaluacion_por_session(
-            str(request.evaluacion_id)
+        evaluacion = await self._repo.obtener_evaluacion_por_id(
+            request.evaluacion_id
         )
         if evaluacion is None:
             raise DomainValidationError(f"Evaluación {request.evaluacion_id} no encontrada")

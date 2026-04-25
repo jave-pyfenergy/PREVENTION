@@ -32,6 +32,12 @@ class RepositorioPort(ABC):
         ...
 
     @abstractmethod
+    async def obtener_evaluacion_por_id(
+        self, evaluacion_id: UUID
+    ) -> EvaluacionTemporal | None:
+        ...
+
+    @abstractmethod
     async def vincular_evaluacion_a_usuario(
         self, evaluacion_id: UUID, user_id: UUID
     ) -> None:

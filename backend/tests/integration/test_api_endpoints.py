@@ -73,6 +73,7 @@ def mock_container():
         items=[
             HistorialItem(
                 evaluacion_id=uuid4(),
+                session_id=str(uuid4()),
                 fecha=datetime.utcnow(),
                 nivel_inflamacion="bajo",
                 probabilidad=0.22,

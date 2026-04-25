@@ -99,6 +99,24 @@ class SupabaseAdapter(RepositorioPort):
             logger.error("Error obteniendo evaluación por session", exc_info=e)
             return None
 
+    async def obtener_evaluacion_por_id(
+        self, evaluacion_id: UUID
+    ) -> EvaluacionTemporal | None:
+        try:
+            result = (
+                self._client.table("evaluaciones")
+                .select("*")
+                .eq("id", str(evaluacion_id))
+                .single()
+                .execute()
+            )
+            if not result.data:
+                return None
+            return self._mapear_evaluacion(result.data)
+        except Exception as e:
+            logger.error("Error obteniendo evaluación por id", exc_info=e)
+            return None
+
     async def vincular_evaluacion_a_usuario(
         self, evaluacion_id: UUID, user_id: UUID
     ) -> None:
