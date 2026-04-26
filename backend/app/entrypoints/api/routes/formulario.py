@@ -62,11 +62,17 @@ async def obtener_upload_url(
     filename = f"{uuid.uuid4()}.jpg"
     path = f"temp/{filename}"
 
-    signed_url = await storage.generar_signed_url_subida(
-        bucket=BUCKET_TEMP,
-        path=path,
-        ttl_seconds=300,
-    )
+    try:
+        signed_url = await storage.generar_signed_url_subida(
+            bucket=BUCKET_TEMP,
+            path=path,
+            ttl_seconds=300,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Servicio de almacenamiento no disponible: {exc}",
+        ) from exc
     return ResponseSignedUrl(signed_url=signed_url, path=path, ttl_seconds=300)
 
 

@@ -139,7 +139,10 @@ class PredecirInflamacion:
             fecha_expiracion=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=24),
             imagen_path_temp=self._extraer_path(formulario.imagen_url),
         )
-        await self._repo.guardar_evaluacion_temporal(evaluacion)
+        try:
+            await self._repo.guardar_evaluacion_temporal(evaluacion)
+        except Exception as exc:
+            logger.warning("Persistencia no disponible, respondiendo sin guardar: %s", exc)
 
         logger.info(
             "Evaluación completada",
