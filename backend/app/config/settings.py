@@ -40,6 +40,19 @@ class Settings(BaseSettings):
     ml_service_url: str = Field(default="http://localhost:8001")
     ml_confidence_threshold: float = Field(default=0.70, ge=0.0, le=1.0)
 
+    # ── Redis ─────────────────────────────────────────────────────────────────
+    redis_url: str | None = Field(
+        default=None,
+        description="URL de Redis para rate limiting y cache (ej: redis://localhost:6379/0). "
+                    "Si es None, se usan contadores en memoria (no compartidos entre workers).",
+    )
+
+    # ── ML ────────────────────────────────────────────────────────────────────
+    model_sha256_checksum: str | None = Field(
+        default=None,
+        description="SHA-256 hex del model.pkl. Si se provee, se verifica antes de cargar.",
+    )
+
     # ── API ───────────────────────────────────────────────────────────────────
     cors_origins: list[str] = Field(
         default=["http://localhost:5173", "http://localhost:3000"],

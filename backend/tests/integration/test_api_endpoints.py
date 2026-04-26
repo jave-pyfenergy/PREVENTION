@@ -92,6 +92,17 @@ def mock_container():
     registrar_mock.ejecutar.return_value = uuid4()
     container.registrar_paciente = registrar_mock
 
+    # Mock de redis — get devuelve None (sin cache), setex y delete no-op
+    redis_mock = AsyncMock()
+    redis_mock.get.return_value = None
+    redis_mock.is_available = False
+    container.redis = redis_mock
+
+    # Mock de ml_model para health check
+    ml_mock = MagicMock()
+    ml_mock.esta_disponible.return_value = True
+    container.ml_model = ml_mock
+
     # Inyectar mock en la app
     app.dependency_overrides[get_container] = lambda: container
 

@@ -41,6 +41,7 @@ export default function Formulario() {
   const [formData, setFormData] = useState({})
   const [imagePath, setImagePath] = useState(null)
   const [consentimiento, setConsentimiento] = useState(false)
+  const [uploadError, setUploadError] = useState(null)
   const { submit, isLoading, error } = useEvaluacion()
   const { uploadImage, uploading, progress } = useImageUpload()
 
@@ -60,11 +61,12 @@ export default function Formulario() {
   const handleImageChange = async (e) => {
     const file = e.target.files?.[0]
     if (!file) return
+    setUploadError(null)
     try {
       const path = await uploadImage(file)
       setImagePath(path)
     } catch (err) {
-      alert(err.message)
+      setUploadError(err.message || 'Error al subir la imagen. Intente nuevamente.')
     }
   }
 
@@ -77,10 +79,6 @@ export default function Formulario() {
   }
 
   const handleFinalSubmit = () => {
-    if (!consentimiento) {
-      alert('Debe aceptar el consentimiento informado para continuar.')
-      return
-    }
     submit({ ...formData, imagen_url: imagePath, consentimiento })
   }
 
@@ -228,6 +226,12 @@ export default function Formulario() {
                     <div className="progress-bar-fill" style={{ width: `${progress}%` }} />
                   </div>
                   <p className="text-sm text-slate-500 mt-1 text-center">Subiendo imagen... {progress}%</p>
+                </div>
+              )}
+
+              {uploadError && (
+                <div className="bg-red-50 border border-red-100 rounded-xl p-4 text-red-700 text-sm">
+                  {uploadError}
                 </div>
               )}
 

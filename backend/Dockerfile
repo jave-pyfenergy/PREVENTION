@@ -23,7 +23,8 @@ RUN pip install --no-cache-dir --prefix=/install \
     httpx google-cloud-secret-manager google-cloud-storage \
     scikit-learn xgboost numpy pandas \
     Pillow onnxruntime \
-    python-multipart structlog \
+    python-multipart structlog slowapi \
+    redis \
     opentelemetry-api opentelemetry-sdk \
     opentelemetry-instrumentation-fastapi
 
@@ -59,12 +60,13 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Producción: gunicorn con workers uvicorn
-CMD ["gunicorn", "app.entrypoints.api.main:app", \
-     "--worker-class", "uvicorn.workers.UvicornWorker", \
-     "--workers", "2", \
-     "--bind", "0.0.0.0:8080", \
-     "--timeout", "30", \
-     "--graceful-timeout", "10", \
-     "--access-logfile", "-", \
-     "--error-logfile", "-"]
+# Producción: gunicorn con workers dinámicos (2*CPU+1)
+CMD ["/bin/sh", "-c", \
+     "exec gunicorn app.entrypoints.api.main:app \
+     --worker-class uvicorn.workers.UvicornWorker \
+     --workers $((2 * $(nproc) + 1)) \
+     --bind 0.0.0.0:${PORT:-8080} \
+     --timeout 30 \
+     --graceful-timeout 10 \
+     --access-logfile - \
+     --error-logfile -"]

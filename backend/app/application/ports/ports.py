@@ -82,6 +82,13 @@ class MLModelPort(ABC):
         """Retorna (probabilidad_cnn, confianza_cnn, gradcam_url)."""
         ...
 
+    def esta_disponible(self) -> bool:
+        """Retorna True si el modelo está cargado en memoria."""
+        return False
+
+    def cargar_modelo(self) -> None:
+        """Pre-carga el modelo. Implementaciones opcionales para pre-warming."""
+
 
 class StoragePort(ABC):
     """Puerto de almacenamiento — abstrae Supabase Storage / GCS."""

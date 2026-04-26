@@ -81,10 +81,11 @@ def get_current_user_id(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token expirado",
         )
-    except (jwt.InvalidTokenError, ValueError) as e:
+    except (jwt.InvalidTokenError, ValueError):
+        # No filtrar detalles internos al cliente — previene information leakage
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Token inválido: {e}",
+            detail="Token de autenticación inválido",
         )
 
 

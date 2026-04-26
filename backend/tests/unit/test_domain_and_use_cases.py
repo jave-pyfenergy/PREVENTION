@@ -235,7 +235,7 @@ class TestPredecirInflamacion:
                 limitacion_movimiento=True,
             ),
             consentimiento=True,
-            imagen_url="https://example.com/image.jpg",
+            imagen_url="https://abcdefghijklmnop.supabase.co/storage/v1/object/sign/temp/image.jpg",
             edad=40,
         )
 

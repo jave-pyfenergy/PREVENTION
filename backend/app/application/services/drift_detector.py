@@ -10,14 +10,15 @@ Mejoras vs v1:
 """
 from __future__ import annotations
 
-import logging
 import math
 import threading
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Iterator
 
-logger = logging.getLogger(__name__)
+import structlog
+
+logger = structlog.get_logger(__name__)
 
 
 @dataclass
@@ -103,6 +104,8 @@ class DriftDetector:
 
     # ── API pública ──────────────────────────────────────────────────────────
 
+    _REDIS_KEY = "drift_detector:estado"
+
     def registrar(self, features: dict[str, float | int | bool]) -> list[str]:
         """
         Registra una muestra y retorna alertas de drift si se detectan.
@@ -112,7 +115,7 @@ class DriftDetector:
         try:
             return self._registrar_interno(features)
         except Exception as e:
-            logger.error("Error en DriftDetector — no propagado", exc_info=e)
+            logger.error("drift_detector_error", error=str(e))
             return []
 
     def exportar_estado(self) -> dict:
@@ -141,10 +144,26 @@ class DriftDetector:
                 stats = _FeatureStats()
                 stats.n, stats.mean, stats.M2 = s["n"], s["mean"], s["M2"]
                 self._online_stats[feat] = stats
-            logger.info(
-                "Estado DriftDetector restaurado",
-                extra={"n": self._total_evaluaciones, "baseline": self._baseline is not None},
-            )
+            logger.info("drift_estado_restaurado", n=self._total_evaluaciones, baseline=self._baseline is not None)
+
+    async def restaurar_desde_redis(self, redis) -> None:
+        """Carga estado previo desde Redis al arrancar. No lanza si Redis no está disponible."""
+        import json
+        try:
+            raw = await redis.get(self._REDIS_KEY)
+            if raw:
+                self.importar_estado(json.loads(raw))
+        except Exception as e:
+            logger.warning("drift_redis_restaurar_fallido", error=str(e))
+
+    async def persistir_en_redis(self, redis) -> None:
+        """Guarda estado actual en Redis. No lanza si Redis no está disponible."""
+        import json
+        try:
+            estado = self.exportar_estado()
+            await redis.setex(self._REDIS_KEY, 86400 * 7, json.dumps(estado))
+        except Exception as e:
+            logger.warning("drift_redis_persistir_fallido", error=str(e))
 
     @property
     def resumen(self) -> dict:
@@ -178,10 +197,7 @@ class DriftDetector:
             # Establecer baseline en primera ventana completa
             if self._baseline is None and len(self._window) == self._window_size:
                 self._baseline = self._snapshot_stats()
-                logger.info(
-                    "Baseline de drift establecido",
-                    extra={"n": self._window_size, "features": list(self._baseline.keys())},
-                )
+                logger.info("drift_baseline_establecido", n=self._window_size, features=list(self._baseline.keys()))
                 return []
 
             if self._baseline is None:
@@ -194,13 +210,7 @@ class DriftDetector:
             alertas = self._detectar_drift()
             if alertas:
                 self._total_alertas += len(alertas)
-                logger.warning(
-                    "Drift detectado",
-                    extra={
-                        "alertas": [str(a) for a in alertas],
-                        "n_total": self._total_evaluaciones,
-                    },
-                )
+                logger.warning("drift_detectado", alertas=[str(a) for a in alertas], n_total=self._total_evaluaciones)
             return [str(a) for a in alertas]
 
     def _snapshot_stats(self) -> dict[str, tuple[float, float]]:
@@ -270,10 +280,4 @@ class DriftDetector:
         # Solo recalibrar si las alertas persisten (drift estructural)
         if alertas_antes > 0:
             self._baseline = nuevo_baseline
-            logger.warning(
-                "Baseline recalibrado por concept drift sostenido",
-                extra={
-                    "n_evaluaciones": self._total_evaluaciones,
-                    "features_drifted": alertas_antes,
-                },
-            )
+            logger.warning("drift_baseline_recalibrado", n_evaluaciones=self._total_evaluaciones, features_drifted=alertas_antes)

@@ -4,9 +4,11 @@ Orquesta la evaluación clínica completa: formulario → ML → reglas clínica
 """
 from __future__ import annotations
 
-import logging
+import time
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
+
+import structlog
 
 from app.application.dto.dtos import RequestFormulario, ResponsePrediccion
 from app.application.ports.hasher_port import HasherPort
@@ -28,7 +30,7 @@ from app.domain.services.evaluador_clinico import (
     ValidadorConsentimiento,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class PredecirInflamacion:
@@ -53,7 +55,8 @@ class PredecirInflamacion:
         self._drift_detector = drift_detector
 
     async def ejecutar(self, request: RequestFormulario) -> ResponsePrediccion:
-        logger.info("Iniciando evaluación clínica", extra={"version": request.version_cuestionario})
+        t0 = time.perf_counter()
+        logger.info("evaluacion_iniciada", version=request.version_cuestionario)
 
         # 1. Construir entidad de dominio
         sintomas = Sintomas(
@@ -90,9 +93,11 @@ class PredecirInflamacion:
 
         # 4. Inferencia tabular — retorna (probabilidad, confianza, importancias)
         try:
+            t_ml = time.perf_counter()
             prob_tabular, conf_tabular, features_importantes = await self._ml.predecir(features)
+            logger.debug("inferencia_tabular_ok", ms=round((time.perf_counter() - t_ml) * 1000, 1))
         except Exception as e:
-            logger.error("Error en inferencia tabular", exc_info=e)
+            logger.error("inferencia_tabular_fallida", error=str(e))
             prob_tabular, conf_tabular, features_importantes = 0.5, 0.3, {}
 
         # 5. Inferencia CNN (si hay imagen)
@@ -103,7 +108,7 @@ class PredecirInflamacion:
                     formulario.imagen_url  # type: ignore
                 )
             except Exception as e:
-                logger.warning("CNN no disponible, usando solo tabular", exc_info=e)
+                logger.warning("cnn_no_disponible", error=str(e))
 
         # 6. Fusión de predicciones (ensemble)
         prob_ml, conf_final = self._evaluador.fusionar_predicciones(
@@ -113,10 +118,7 @@ class PredecirInflamacion:
         # 7. Motor de reglas clínicas — ajuste experto sobre predicción ML
         prob_final, reglas_clinicas = ReglasClinicas.aplicar(formulario, prob_ml)
         if reglas_clinicas:
-            logger.info(
-                "Reglas clínicas aplicadas",
-                extra={"n": len(reglas_clinicas), "ajuste": round(prob_final - prob_ml, 4)},
-            )
+            logger.info("reglas_clinicas_aplicadas", n=len(reglas_clinicas), ajuste=round(prob_final - prob_ml, 4))
 
         nivel = self._evaluador.calcular_nivel(prob_final)
 
@@ -142,18 +144,17 @@ class PredecirInflamacion:
         try:
             await self._repo.guardar_evaluacion_temporal(evaluacion)
         except Exception as exc:
-            logger.warning("Persistencia no disponible, respondiendo sin guardar: %s", exc)
+            logger.warning("persistencia_no_disponible", error=str(exc))
 
         logger.info(
-            "Evaluación completada",
-            extra={
-                "session_id": session_id,
-                "nivel": nivel.value,
-                "prob_ml": prob_ml,
-                "prob_final": prob_final,
-                "confianza": conf_final,
-                "reglas": len(reglas_clinicas),
-            },
+            "evaluacion_completada",
+            session_id=session_id,
+            nivel=nivel.value,
+            prob_ml=round(prob_ml, 4),
+            prob_final=round(prob_final, 4),
+            confianza=round(conf_final, 4),
+            reglas=len(reglas_clinicas),
+            total_ms=round((time.perf_counter() - t0) * 1000, 1),
         )
 
         return ResponsePrediccion(

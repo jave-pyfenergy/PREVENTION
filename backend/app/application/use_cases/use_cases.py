@@ -4,8 +4,9 @@ VincularEvaluacion, ObtenerHistorial, RegistrarPaciente.
 """
 from __future__ import annotations
 
-import logging
 from uuid import UUID
+
+import structlog
 
 from app.application.dto.dtos import (
     HistorialItem,
@@ -17,9 +18,9 @@ from app.application.dto.dtos import (
 from app.application.ports.hasher_port import HasherPort
 from app.application.ports.repositorio_port import RepositorioPort
 from app.application.ports.storage_port import StoragePort
-from app.domain.services.evaluador_clinico import DomainValidationError
+from app.domain.exceptions import DomainValidationError
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class VincularEvaluacion:
@@ -52,16 +53,13 @@ class VincularEvaluacion:
                     evaluacion.imagen_path_temp, request.user_id
                 )
             except Exception as e:
-                logger.warning("No se pudo mover la imagen", exc_info=e)
+                logger.warning("imagen_no_movida", error=str(e))
 
         # Vincular en base de datos
         await self._repo.vincular_evaluacion_a_usuario(
             request.evaluacion_id, request.user_id
         )
-        logger.info(
-            "Evaluación vinculada",
-            extra={"evaluacion_id": str(request.evaluacion_id), "user_id": str(request.user_id)},
-        )
+        logger.info("evaluacion_vinculada", evaluacion_id=str(request.evaluacion_id), user_id=str(request.user_id))
 
 
 class ObtenerHistorial:
@@ -116,5 +114,5 @@ class RegistrarPaciente:
             identificacion_hash=id_hash,
             telefono_hash=tel_hash,
         )
-        logger.info("Paciente registrado", extra={"paciente_id": str(paciente_id)})
+        logger.info("paciente_registrado", paciente_id=str(paciente_id))
         return paciente_id

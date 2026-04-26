@@ -14,6 +14,7 @@ from app.application.use_cases.predecir_inflamacion import PredecirInflamacion
 from app.application.use_cases.registrar_paciente import RegistrarPaciente
 from app.application.use_cases.vincular_evaluacion import VincularEvaluacion
 from app.config.settings import Settings, get_settings
+from app.infrastructure.cache.redis_client import RedisClient
 from app.infrastructure.db.supabase_adapter import SupabaseAdapter
 from app.infrastructure.hashing.sha256_adapter import SHA256Adapter
 from app.infrastructure.ml.sklearn_adapter import SklearnAdapter
@@ -32,7 +33,6 @@ class Container:
         self._init_use_cases()
 
     def _init_adapters(self) -> None:
-        # Infraestructura base
         self._repositorio: RepositorioPort = SupabaseAdapter(
             url=self._settings.supabase_url_str,
             service_key=self._settings.supabase_service_key,
@@ -49,7 +49,10 @@ class Container:
         self._ml_model: MLModelPort = SklearnAdapter(
             model_path=self._settings.ml_model_path,
             confidence_threshold=self._settings.ml_confidence_threshold,
+            expected_checksum=self._settings.model_sha256_checksum,
         )
+        # Redis: opcional — degradación graceful si no está configurado
+        self._redis = RedisClient(url=self._settings.redis_url)
 
     def _init_use_cases(self) -> None:
         self._drift_detector = DriftDetector(window_size=100)
@@ -95,6 +98,18 @@ class Container:
     @property
     def storage(self) -> StoragePort:
         return self._storage
+
+    @property
+    def redis(self) -> RedisClient:
+        return self._redis
+
+    @property
+    def ml_model(self) -> MLModelPort:
+        return self._ml_model
+
+    @property
+    def drift_detector(self) -> DriftDetector:
+        return self._drift_detector
 
 
 @lru_cache(maxsize=1)

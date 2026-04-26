@@ -3,7 +3,6 @@ PrevencionApp — FastAPI Application Entry Point.
 Configuración de middleware, CORS, OpenTelemetry y manejo de errores.
 """
 
-import logging
 import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -14,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config.container import get_container
 from app.entrypoints.api.limiter import limiter
@@ -23,6 +23,8 @@ from app.domain.services.evaluador_clinico import (
     ConsentimientoRequeridoError,
     DomainValidationError,
 )
+
+_MAX_BODY_BYTES = 1 * 1024 * 1024  # 1 MB
 
 # ── Logging estructurado ──────────────────────────────────────────────────────
 structlog.configure(
@@ -46,14 +48,30 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Inicialización y teardown de la aplicación."""
-    logger.info("PrevencionApp iniciando", env=settings.app_env, version="1.0.0")
+    logger.info("app_iniciando", env=settings.app_env, version="1.0.0")
 
-    # Pre-warm el contenedor DI (carga modelos, conecta DB)
     container = get_container()
-    logger.info("Contenedor DI inicializado")
+
+    # Conectar Redis antes de recibir tráfico
+    await container.redis.connect()
+
+    # Restaurar estado del detector de drift desde Redis (sobrevive reinicios)
+    await container.drift_detector.restaurar_desde_redis(container.redis)
+
+    # Pre-warm modelo ML — evita cold-start en la primera evaluación
+    try:
+        container.ml_model.cargar_modelo()
+        logger.info("modelo_ml_precargado")
+    except Exception as exc:
+        logger.warning("modelo_ml_precarga_fallida", error=str(exc))
+
+    logger.info("contenedor_di_listo")
 
     yield
 
+    # Persistir estado del detector de drift antes de cerrar
+    await container.drift_detector.persistir_en_redis(container.redis)
+    await container.redis.close()
     logger.info("PrevencionApp cerrando")
 
 
@@ -83,6 +101,39 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
     max_age=600,
 )
+
+
+# ── Security headers ──────────────────────────────────────────────────────────
+class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        if settings.is_production:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        if request.url.path.startswith(settings.api_v1_prefix):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
+
+app.add_middleware(_SecurityHeadersMiddleware)
+
+
+# ── Body size limit ───────────────────────────────────────────────────────────
+class _BodySizeLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > _MAX_BODY_BYTES:
+            return JSONResponse(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                content={"error": "payload_too_large", "message": "El cuerpo de la solicitud supera 1 MB"},
+            )
+        return await call_next(request)
+
+
+app.add_middleware(_BodySizeLimitMiddleware)
 
 
 # ── Middleware de auditoría clínica ───────────────────────────────────────────
@@ -159,6 +210,8 @@ async def health_check(container=Depends(get_container)):
     import uuid as _uuid
 
     checks: dict[str, str] = {}
+
+    # Database
     try:
         await container.repositorio.obtener_paciente(
             _uuid.UUID("00000000-0000-0000-0000-000000000000")
@@ -167,10 +220,19 @@ async def health_check(container=Depends(get_container)):
     except Exception:
         checks["database"] = "error"
 
-    all_ok = all(v == "ok" for v in checks.values())
-    return {
-        "status": "ok" if all_ok else "degraded",
-        "version": "1.0.0",
-        "env": settings.app_env,
-        "checks": checks,
-    }
+    # ML model
+    checks["ml_model"] = "ok" if container.ml_model.esta_disponible() else "unavailable"
+
+    # Redis (opcional — degraded, no error)
+    checks["redis"] = "ok" if container.redis.is_available else "unavailable"
+
+    critical_failing = checks["database"] == "error"
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE if critical_failing else status.HTTP_200_OK,
+        content={
+            "status": "error" if critical_failing else "ok",
+            "version": "1.0.0",
+            "env": settings.app_env,
+            "checks": checks,
+        },
+    )

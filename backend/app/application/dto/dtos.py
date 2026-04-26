@@ -4,11 +4,17 @@ Contratos de entrada/salida entre la API y los casos de uso.
 Validación estricta con Pydantic v2.
 """
 
+import re
 from datetime import datetime, timezone
 from typing import Annotated
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# Patrón para validar imagen_url — solo permite URLs de Supabase Storage
+_SUPABASE_STORAGE_RE = re.compile(
+    r'^https://[a-z0-9-]+\.supabase\.co/storage/v1/object/'
+)
 
 
 # ── Request DTOs ──────────────────────────────────────────────────────────────
@@ -45,6 +51,18 @@ class RequestFormulario(BaseModel):
     sintomas: SintomasRequest
     imagen_url: str | None = Field(default=None, max_length=2048)
     consentimiento: bool
+
+    @field_validator("imagen_url")
+    @classmethod
+    def validar_imagen_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if not _SUPABASE_STORAGE_RE.match(v):
+            raise ValueError(
+                "imagen_url debe apuntar a Supabase Storage "
+                "(https://<proyecto>.supabase.co/storage/v1/object/...)"
+            )
+        return v
     version_cuestionario: str = Field(default="1.0", max_length=10)
 
     # Demográficos básicos (opcionales en flujo anónimo)

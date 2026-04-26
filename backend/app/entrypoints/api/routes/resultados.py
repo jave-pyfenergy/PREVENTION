@@ -1,13 +1,22 @@
 """PrevencionApp — Routes: Resultados e Historial."""
 
-from fastapi import APIRouter, HTTPException, Query, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 
 from app.application.dto.dtos import ResponseHistorial, ResponsePrediccion
+from app.config.container import Container, get_container
 from app.entrypoints.api.dependencies import CurrentUserId, HistorialDep
-from app.config.container import get_container
-from fastapi import Depends
+from app.infrastructure.cache.redis_client import RedisClient
 
 router = APIRouter()
+
+_CACHE_TTL = 300  # 5 minutos — menor que el TTL de la evaluación (24h)
+
+
+def _get_redis(container: Annotated[Container, Depends(get_container)]) -> RedisClient:
+    return container.redis
 
 
 @router.get(
@@ -18,8 +27,16 @@ router = APIRouter()
 )
 async def obtener_resultado(
     session_id: str,
-    container=Depends(get_container),
+    container: Annotated[Container, Depends(get_container)],
+    redis: Annotated[RedisClient, Depends(_get_redis)],
 ) -> ResponsePrediccion:
+    cache_key = f"resultado:{session_id}"
+
+    # Intentar desde Redis primero
+    cached = await redis.get(cache_key)
+    if cached:
+        return ResponsePrediccion.model_validate_json(cached)
+
     evaluacion = await container.repositorio.obtener_evaluacion_por_session(session_id)
     if evaluacion is None:
         raise HTTPException(
@@ -27,15 +44,19 @@ async def obtener_resultado(
             detail=f"Resultado no encontrado para session_id: {session_id}",
         )
     if evaluacion.esta_expirada():
+        await redis.delete(cache_key)
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="La evaluación ha expirado",
         )
     resultado = evaluacion.resultado
     if resultado is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resultado no disponible")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resultado no disponible",
+        )
 
-    return ResponsePrediccion(
+    response = ResponsePrediccion(
         evaluacion_id=evaluacion.id,
         session_id=evaluacion.session_id,
         nivel_inflamacion=resultado.nivel_riesgo.value,
@@ -47,6 +68,11 @@ async def obtener_resultado(
         features_importantes=resultado.features_importantes,
         fecha=evaluacion.fecha_creacion,
     )
+
+    # Guardar en cache para requests subsecuentes
+    await redis.setex(cache_key, _CACHE_TTL, response.model_dump_json())
+
+    return response
 
 
 @router.get(
