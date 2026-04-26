@@ -2,7 +2,6 @@
 PrevencionApp — Dependencias de FastAPI.
 Validación JWT, extracción de user_id y resolución de use cases.
 """
-from __future__ import annotations
 
 from typing import Annotated
 from uuid import UUID

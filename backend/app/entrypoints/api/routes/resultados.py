@@ -1,5 +1,4 @@
 """PrevencionApp — Routes: Resultados e Historial."""
-from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, status
 
@@ -45,6 +44,7 @@ async def obtener_resultado(
         es_confiable=resultado.es_confiable,
         gradcam_url=resultado.gradcam_url,
         recomendacion=resultado.recomendacion(),
+        features_importantes=resultado.features_importantes,
         fecha=evaluacion.fecha_creacion,
     )
 

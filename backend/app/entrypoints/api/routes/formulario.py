@@ -1,25 +1,28 @@
 """PrevencionApp — Routes: Evaluación y Subida de Imágenes."""
-from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.application.dto.dtos import RequestFormulario, ResponsePrediccion, ResponseSignedUrl
 from app.application.dto.dtos import RequestVincularEvaluacion
 from app.config.container import get_container
+from app.config.settings import get_settings
 from app.entrypoints.api.dependencies import (
     CurrentUserId,
     PredecirDep,
     VincularDep,
     get_storage,
 )
+from app.entrypoints.api.limiter import limiter as _limiter
 from app.infrastructure.storage.supabase_storage_adapter import (
     BUCKET_TEMP,
     SupabaseStorageAdapter,
 )
 
 router = APIRouter()
+_settings = get_settings()
+_RATE_LIMIT = f"{_settings.rate_limit_per_hour}/hour"
 
 
 @router.post(
@@ -33,11 +36,13 @@ router = APIRouter()
         "No requiere autenticación."
     ),
 )
+@_limiter.limit(_RATE_LIMIT)
 async def crear_evaluacion_temporal(
-    request: RequestFormulario,
+    request: Request,
+    formulario: RequestFormulario,
     predecir: PredecirDep,
 ) -> ResponsePrediccion:
-    return await predecir.ejecutar(request)
+    return await predecir.ejecutar(formulario)
 
 
 @router.post(
@@ -71,14 +76,12 @@ async def obtener_upload_url(
     summary="Vincular evaluación anónima al usuario autenticado",
 )
 async def vincular_evaluacion(
-    evaluacion_id: str,
+    evaluacion_id: uuid.UUID,
     user_id: CurrentUserId,
     vincular: VincularDep,
 ) -> dict:
-    from uuid import UUID
-
     request = RequestVincularEvaluacion(
-        evaluacion_id=UUID(evaluacion_id),
+        evaluacion_id=evaluacion_id,
         user_id=user_id,
     )
     await vincular.ejecutar(request)

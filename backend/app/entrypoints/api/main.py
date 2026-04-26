@@ -2,7 +2,6 @@
 PrevencionApp — FastAPI Application Entry Point.
 Configuración de middleware, CORS, OpenTelemetry y manejo de errores.
 """
-from __future__ import annotations
 
 import logging
 import time
@@ -10,11 +9,14 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 import structlog
-from fastapi import FastAPI, Request, status
+from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from app.config.container import get_container
+from app.entrypoints.api.limiter import limiter
 from app.config.settings import get_settings
 from app.entrypoints.api.routes import formulario, paciente, resultados
 from app.domain.services.evaluador_clinico import (
@@ -68,6 +70,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
@@ -79,22 +85,44 @@ app.add_middleware(
 )
 
 
-# ── Middleware de telemetría ───────────────────────────────────────────────────
+# ── Middleware de auditoría clínica ───────────────────────────────────────────
 @app.middleware("http")
-async def telemetria_middleware(request: Request, call_next):
+async def audit_middleware(request: Request, call_next):
+    """
+    Registra todas las operaciones con contexto clínico de auditoría.
+    Cumplimiento: GDPR Art.30 (registro de actividades), HIPAA §164.312.
+    """
     start = time.perf_counter()
     request_id = request.headers.get("X-Request-ID", "")
+
+    # Extraer user_id del JWT de forma no bloqueante (solo para auditoría)
+    user_id: str | None = None
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        try:
+            import jwt as _jwt
+            token = auth_header.removeprefix("Bearer ").strip()
+            payload = _jwt.decode(token, options={"verify_signature": False})
+            user_id = payload.get("sub")
+        except Exception:
+            pass
 
     response = await call_next(request)
 
     duration_ms = (time.perf_counter() - start) * 1000
-    logger.info(
-        "request",
+    is_data_op = request.method in ("POST", "PUT", "PATCH", "DELETE")
+
+    log_fn = logger.warning if response.status_code >= 400 else logger.info
+    log_fn(
+        "audit",
         method=request.method,
         path=request.url.path,
         status=response.status_code,
         duration_ms=round(duration_ms, 2),
         request_id=request_id,
+        user_id=user_id,
+        ip=request.client.host if request.client else None,
+        data_operation=is_data_op,
     )
     response.headers["X-Response-Time"] = f"{duration_ms:.2f}ms"
     return response
@@ -127,5 +155,22 @@ app.include_router(paciente.router, prefix=API_PREFIX, tags=["Paciente"])
 
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/health", tags=["Infrastructure"], include_in_schema=False)
-async def health_check():
-    return {"status": "ok", "version": "1.0.0", "env": settings.app_env}
+async def health_check(container=Depends(get_container)):
+    import uuid as _uuid
+
+    checks: dict[str, str] = {}
+    try:
+        await container.repositorio.obtener_paciente(
+            _uuid.UUID("00000000-0000-0000-0000-000000000000")
+        )
+        checks["database"] = "ok"
+    except Exception:
+        checks["database"] = "error"
+
+    all_ok = all(v == "ok" for v in checks.values())
+    return {
+        "status": "ok" if all_ok else "degraded",
+        "version": "1.0.0",
+        "env": settings.app_env,
+        "checks": checks,
+    }
