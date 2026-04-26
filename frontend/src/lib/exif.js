@@ -1,17 +1,18 @@
 /**
  * PrevencionApp — Strip EXIF metadata antes del upload.
  * Privacy by Design: elimina geolocalización y datos del dispositivo.
- * Usa piexifjs para limpiar JPEG EXIF.
+ *
+ * FIX: importar piexifjs como módulo ES (no window.piexif — silently broken en Vite).
  */
+import piexif from 'piexifjs'
 
 /**
  * Elimina todos los metadatos EXIF de una imagen JPEG.
- * Para PNG (sin EXIF nativo), retorna el file sin cambios.
- * @param {File} file - Archivo de imagen del usuario
- * @returns {Promise<File>} - Archivo limpio sin metadatos de ubicación
+ * Para PNG/WebP (sin EXIF nativo), retorna el file sin cambios.
+ * @param {File} file
+ * @returns {Promise<File>}
  */
 export async function stripExif(file) {
-  // Solo JPEG tiene EXIF
   if (!file.type.includes('jpeg') && !file.type.includes('jpg')) {
     return file
   }
@@ -21,19 +22,9 @@ export async function stripExif(file) {
 
     reader.onload = (e) => {
       try {
-        // piexifjs: eliminar todos los segmentos EXIF
-        const { piexif } = window
-        if (!piexif) {
-          // Fallback: si piexifjs no está disponible, usar el file original
-          console.warn('[EXIF] piexifjs no disponible — imagen sin strip')
-          resolve(file)
-          return
-        }
-
         const dataUrl = e.target.result
         const stripped = piexif.remove(dataUrl)
 
-        // Convertir dataURL de vuelta a File
         const arr = stripped.split(',')
         const mime = arr[0].match(/:(.*?);/)[1]
         const bstr = atob(arr[1])
@@ -41,15 +32,15 @@ export async function stripExif(file) {
         const u8arr = new Uint8Array(n)
         while (n--) u8arr[n] = bstr.charCodeAt(n)
 
-        const cleanFile = new File([u8arr], file.name, { type: mime })
-        resolve(cleanFile)
+        resolve(new File([u8arr], file.name, { type: mime }))
       } catch (err) {
-        console.warn('[EXIF] Error al strip EXIF, usando original:', err)
+        // Log pero no fallar — preferimos subir con EXIF a no subir
+        console.error('[EXIF] Strip falló, imagen con metadatos:', err)
         resolve(file)
       }
     }
 
-    reader.onerror = () => reject(new Error('Error leyendo imagen'))
+    reader.onerror = () => reject(new Error('Error leyendo imagen para strip EXIF'))
     reader.readAsDataURL(file)
   })
 }
@@ -57,17 +48,20 @@ export async function stripExif(file) {
 /**
  * Verifica que una imagen no tenga tags GPS en EXIF.
  * Usado en tests e2e para garantizar privacidad.
+ * @param {File} file
+ * @returns {Promise<boolean>}
  */
 export async function tieneGPS(file) {
+  if (!file.type.includes('jpeg') && !file.type.includes('jpg')) {
+    return false
+  }
   return new Promise((resolve) => {
     const reader = new FileReader()
     reader.onload = (e) => {
       try {
-        const { piexif } = window
-        if (!piexif) { resolve(false); return }
         const exifData = piexif.load(e.target.result)
         const gps = exifData['GPS']
-        resolve(gps && Object.keys(gps).length > 0)
+        resolve(Boolean(gps && Object.keys(gps).length > 0))
       } catch {
         resolve(false)
       }
