@@ -7,10 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import pickle
+import threading
 from pathlib import Path
 from typing import Any
 
+import httpx
 import numpy as np
 
 from app.application.ports.ports import MLModelPort
@@ -29,6 +32,29 @@ FEATURE_ORDER = [
     "edad",
 ]
 
+# Labels en español para XAI
+FEATURE_LABELS_ES = {
+    "dolor_articular": "Dolor articular",
+    "rigidez_matutina": "Rigidez matutina",
+    "duracion_rigidez_minutos": "Duración de rigidez",
+    "inflamacion_visible": "Inflamación visible",
+    "calor_local": "Calor local",
+    "limitacion_movimiento": "Limitación de movimiento",
+    "num_localizaciones": "Articulaciones afectadas",
+    "edad": "Edad (factor de riesgo)",
+}
+
+
+def _extract_tree_estimator(model: Any) -> Any:
+    """Extrae el estimador árbol de un Pipeline sklearn o retorna el modelo directamente."""
+    try:
+        from sklearn.pipeline import Pipeline
+        if isinstance(model, Pipeline):
+            return model.steps[-1][1]
+    except ImportError:
+        pass
+    return model
+
 
 class SklearnAdapter(MLModelPort):
     """
@@ -40,48 +66,64 @@ class SklearnAdapter(MLModelPort):
         self._model_path = Path(model_path)
         self._confidence_threshold = confidence_threshold
         self._model: Any = None
+        self._load_lock = threading.Lock()
 
     def _cargar_modelo(self) -> Any:
-        """Carga el modelo desde disco. Thread-safe para uso en threadpool."""
+        """Carga el modelo desde disco. Thread-safe: double-checked locking."""
         if self._model is not None:
             return self._model
 
-        if not self._model_path.exists():
-            logger.warning(
-                f"Modelo no encontrado en {self._model_path} — usando modelo dummy"
-            )
-            self._model = _DummyModel()
-            return self._model
+        with self._load_lock:
+            if self._model is not None:
+                return self._model
 
-        logger.info(f"Cargando modelo desde {self._model_path}")
-        with open(self._model_path, "rb") as f:
-            self._model = pickle.load(f)  # noqa: S301 — archivo interno, confiable
-        logger.info("Modelo cargado exitosamente")
-        return self._model
+            if not self._model_path.exists():
+                logger.warning(
+                    f"Modelo no encontrado en {self._model_path} — usando modelo dummy"
+                )
+                self._model = _DummyModel()
+                return self._model
+
+            logger.info(f"Cargando modelo desde {self._model_path}")
+            with open(self._model_path, "rb") as f:
+                self._model = pickle.load(f)  # noqa: S301 — archivo interno, confiable
+            logger.info("Modelo cargado exitosamente")
+            return self._model
 
     def _predecir_sync(
         self, features: dict[str, float | int | bool]
-    ) -> tuple[float, float]:
-        """Inferencia síncrona — se ejecuta en threadpool."""
+    ) -> tuple[float, float, dict[str, float]]:
+        """Inferencia síncrona con feature importances — se ejecuta en threadpool."""
         model = self._cargar_modelo()
 
-        # Construir vector de features en orden fijo
         X = np.array([[features.get(f, 0) for f in FEATURE_ORDER]], dtype=np.float32)
 
-        # Probabilidad de clase positiva (inflamación)
         proba = model.predict_proba(X)[0]
         prob_positiva = float(proba[1]) if len(proba) > 1 else float(proba[0])
-
-        # Confianza: distancia del 0.5 escalada a [0, 1]
         confianza = min(abs(prob_positiva - 0.5) * 2, 1.0)
 
-        return round(prob_positiva, 4), round(confianza, 4)
+        # Compute feature importances — handle both Pipeline and raw estimators
+        importancias: dict[str, float] = {}
+        estimator = _extract_tree_estimator(model)
+        if estimator is not None and hasattr(estimator, "feature_importances_"):
+            raw = {
+                name: float(imp)
+                for name, imp in zip(FEATURE_ORDER, estimator.feature_importances_)
+            }
+            total = sum(raw.values()) or 1.0
+            importancias = {k: round(v / total, 4) for k, v in raw.items()}
+        elif isinstance(model, _DummyModel):
+            importancias = model.get_feature_importances(X[0], features)
+        else:
+            importancias = {name: round(1.0 / len(FEATURE_ORDER), 4) for name in FEATURE_ORDER}
+
+        return round(prob_positiva, 4), round(confianza, 4), importancias
 
     async def predecir(
         self, features: dict[str, float | int | bool]
-    ) -> tuple[float, float]:
-        """Ejecuta inferencia tabular en el threadpool de asyncio."""
-        loop = asyncio.get_event_loop()
+    ) -> tuple[float, float, dict[str, float]]:
+        """Ejecuta inferencia tabular con importancias en el threadpool de asyncio."""
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._predecir_sync, features)
 
     async def analizar_imagen(
@@ -92,8 +134,6 @@ class SklearnAdapter(MLModelPort):
         Si no está disponible, retorna valores neutros (circuit breaker).
         """
         try:
-            import httpx
-
             async with httpx.AsyncClient(timeout=25.0) as client:
                 response = await client.post(
                     f"{self._cnn_service_url}/analyze",
@@ -105,12 +145,10 @@ class SklearnAdapter(MLModelPort):
         except Exception as e:
             logger.warning("Servicio CNN no disponible", exc_info=e)
 
-        # Circuit breaker: valores neutros
         return 0.5, 0.0, None
 
     @property
     def _cnn_service_url(self) -> str:
-        import os
         return os.getenv("ML_SERVICE_URL", "http://localhost:8001")
 
 
@@ -120,17 +158,37 @@ class _DummyModel:
     Simula un RandomForest con lógica determinista basada en síntomas.
     """
 
+    # Pesos de cada feature en el score final
+    _WEIGHTS = [0.20, 0.15, 0.15, 0.20, 0.10, 0.10, 0.10, 0.0]
+    # dolor, rigidez, duracion, inflamacion, calor, limitacion, localizaciones, edad
+
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
-        # Lógica simplificada: más síntomas = mayor probabilidad
         features = X[0]
         score = (
-            features[0] * 0.20 +  # dolor_articular
-            features[1] * 0.15 +  # rigidez_matutina
+            features[0] * 0.20 +            # dolor_articular
+            features[1] * 0.15 +            # rigidez_matutina
             min(features[2] / 120, 1.0) * 0.15 +  # duracion_rigidez
-            features[3] * 0.20 +  # inflamacion_visible
-            features[4] * 0.10 +  # calor_local
-            features[5] * 0.10 +  # limitacion_movimiento
+            features[3] * 0.20 +            # inflamacion_visible
+            features[4] * 0.10 +            # calor_local
+            features[5] * 0.10 +            # limitacion_movimiento
             min(features[6] / 4, 1.0) * 0.10   # num_localizaciones
         )
         prob = float(np.clip(score, 0.05, 0.95))
         return np.array([[1 - prob, prob]])
+
+    def get_feature_importances(
+        self, X: np.ndarray, raw_features: dict[str, float | int | bool]
+    ) -> dict[str, float]:
+        """Calcula contribución de cada feature al score normalizada a [0,1]."""
+        contributions = {
+            "dolor_articular":           float(X[0]) * 0.20,
+            "rigidez_matutina":          float(X[1]) * 0.15,
+            "duracion_rigidez_minutos":  min(float(X[2]) / 120, 1.0) * 0.15,
+            "inflamacion_visible":       float(X[3]) * 0.20,
+            "calor_local":               float(X[4]) * 0.10,
+            "limitacion_movimiento":     float(X[5]) * 0.10,
+            "num_localizaciones":        min(float(X[6]) / 4, 1.0) * 0.10,
+            "edad":                      0.0,  # dummy model ignores age
+        }
+        total = sum(contributions.values()) or 1.0
+        return {k: round(v / total, 4) for k, v in contributions.items()}

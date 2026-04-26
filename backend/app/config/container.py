@@ -8,6 +8,7 @@ from app.application.ports.hasher_port import HasherPort
 from app.application.ports.ml_model_port import MLModelPort
 from app.application.ports.repositorio_port import RepositorioPort
 from app.application.ports.storage_port import StoragePort
+from app.application.services.drift_detector import DriftDetector
 from app.application.use_cases.obtener_historial import ObtenerHistorial
 from app.application.use_cases.predecir_inflamacion import PredecirInflamacion
 from app.application.use_cases.registrar_paciente import RegistrarPaciente
@@ -51,11 +52,13 @@ class Container:
         )
 
     def _init_use_cases(self) -> None:
+        self._drift_detector = DriftDetector(window_size=100)
         self._predecir = PredecirInflamacion(
             ml_model=self._ml_model,
             repositorio=self._repositorio,
             hasher=self._hasher,
             storage=self._storage,
+            drift_detector=self._drift_detector,
         )
         self._vincular = VincularEvaluacion(
             repositorio=self._repositorio,
