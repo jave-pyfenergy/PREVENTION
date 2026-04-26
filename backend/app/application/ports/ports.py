@@ -71,8 +71,8 @@ class MLModelPort(ABC):
     async def predecir(
         self,
         features: dict[str, float | int | bool],
-    ) -> tuple[float, float]:
-        """Retorna (probabilidad, confianza)."""
+    ) -> tuple[float, float, dict[str, float]]:
+        """Retorna (probabilidad, confianza, features_importantes)."""
         ...
 
     @abstractmethod

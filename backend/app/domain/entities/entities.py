@@ -6,7 +6,7 @@ Sin dependencias externas — solo Python puro.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from uuid import UUID, uuid4
 
@@ -41,7 +41,7 @@ class Formulario:
     """Entidad raíz — representa una evaluación clínica completa."""
     id: UUID = field(default_factory=uuid4)
     paciente_id: UUID | None = None
-    fecha: datetime = field(default_factory=datetime.utcnow)
+    fecha: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     sintomas: Sintomas | None = None
     imagen_url: str | None = None
     consentimiento: bool = False
@@ -117,7 +117,7 @@ class EvaluacionTemporal:
     session_id: str = field(default_factory=lambda: str(uuid4()))
     formulario: Formulario | None = None
     resultado: ResultadoML | None = None
-    fecha_creacion: datetime = field(default_factory=datetime.utcnow)
+    fecha_creacion: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     fecha_expiracion: datetime | None = None
     user_id: UUID | None = None  # None = anónima, UUID = vinculada
     imagen_path_temp: str | None = None
@@ -128,7 +128,7 @@ class EvaluacionTemporal:
     def esta_expirada(self) -> bool:
         if self.fecha_expiracion is None:
             return False
-        return datetime.utcnow() > self.fecha_expiracion
+        return datetime.now(timezone.utc).replace(tzinfo=None) > self.fecha_expiracion
 
 
 @dataclass
@@ -147,8 +147,8 @@ class Paciente:
     pais_id: int | None = None
     ciudad_id: int | None = None
     activo: bool = True
-    fecha_creacion: datetime = field(default_factory=datetime.utcnow)
-    fecha_actualizacion: datetime = field(default_factory=datetime.utcnow)
+    fecha_creacion: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    fecha_actualizacion: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def nombre_completo(self) -> str:
         return f"{self.primer_nombre} {self.primer_apellido}".strip()

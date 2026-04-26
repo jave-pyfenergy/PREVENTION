@@ -3,9 +3,8 @@ PrevencionApp — DTOs de la capa de Aplicación.
 Contratos de entrada/salida entre la API y los casos de uso.
 Validación estricta con Pydantic v2.
 """
-from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated
 from uuid import UUID
 
@@ -93,6 +92,14 @@ class ResponsePrediccion(BaseModel):
     es_confiable: bool
     gradcam_url: str | None = None
     recomendacion: str
+    features_importantes: dict[str, float] = Field(
+        default_factory=dict,
+        description="Contribución normalizada de cada síntoma al resultado (XAI)",
+    )
+    reglas_clinicas: list[str] = Field(
+        default_factory=list,
+        description="Reglas clínicas expertas que ajustaron la predicción ML",
+    )
     disclaimer: str = (
         "Este análisis es orientativo y no reemplaza el diagnóstico médico. "
         "Consulte siempre con un profesional de salud."
@@ -136,4 +143,4 @@ class ResponseHistorial(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = "1.0.0"
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
