@@ -41,7 +41,7 @@ def etl_supabase_bigquery(cloud_event):
     except Exception:
         since_override = None
 
-    logger.info(f"ETL iniciado — {datetime.utcnow().isoformat()}")
+    logger.info(f"ETL iniciado — {datetime.now(timezone.utc).isoformat()}")
 
     try:
         result = run_etl(since_override=since_override)
@@ -102,8 +102,9 @@ def extraer_de_supabase(since: datetime) -> list[dict]:
 
     todas = []
     offset = 0
+    MAX_PAGES = 200  # límite de seguridad — 200 * 1000 = 200k registros por ejecución
 
-    while True:
+    for page in range(MAX_PAGES):
         response = httpx.get(
             f"{SUPABASE_URL}/rest/v1/mv_analitica_riesgo",
             headers=headers,
@@ -125,11 +126,12 @@ def extraer_de_supabase(since: datetime) -> list[dict]:
         todas.extend(batch)
         offset += len(batch)
 
-        # Si el batch es menor que el tamaño, llegamos al final
         if len(batch) < BATCH_SIZE:
             break
 
-        logger.info(f"Paginación ETL: {len(todas)} registros extraídos hasta ahora")
+        logger.info(f"Paginación ETL página {page + 1}: {len(todas)} registros hasta ahora")
+    else:
+        logger.warning(f"ETL alcanzó el límite máximo de páginas ({MAX_PAGES})")
 
     return todas
 
