@@ -14,7 +14,7 @@ import pytest
 from app.application.dto.dtos import RequestFormulario, SintomasRequest
 from app.application.use_cases.predecir_inflamacion import PredecirInflamacion
 from app.domain.entities.entities import NivelRiesgo
-from app.domain.services.evaluador_clinico import ConsentimientoRequeridoError
+from pydantic import ValidationError
 from app.infrastructure.hashing.sha256_adapter import SHA256Adapter
 from app.infrastructure.ml.sklearn_adapter import SklearnAdapter
 
@@ -116,18 +116,17 @@ class TestFlujoAnonimo:
 
     @pytest.mark.asyncio
     async def test_sin_consentimiento_bloquea_evaluacion(self, use_case_real):
-        request = RequestFormulario(
-            sintomas=SintomasRequest(
-                dolor_articular=True, rigidez_matutina=True,
-                duracion_rigidez_minutos=60,
-                localizacion=["mano_derecha"],
-                inflamacion_visible=True, calor_local=True,
-                limitacion_movimiento=True,
-            ),
-            consentimiento=False,  # ← Sin consentimiento
-        )
-        with pytest.raises(ConsentimientoRequeridoError):
-            await use_case_real.ejecutar(request)
+        with pytest.raises(ValidationError):
+            RequestFormulario(
+                sintomas=SintomasRequest(
+                    dolor_articular=True, rigidez_matutina=True,
+                    duracion_rigidez_minutos=60,
+                    localizacion=["mano_derecha"],
+                    inflamacion_visible=True, calor_local=True,
+                    limitacion_movimiento=True,
+                ),
+                consentimiento=False,
+            )
 
     @pytest.mark.asyncio
     async def test_evaluacion_sin_imagen_funciona(self, use_case_real):

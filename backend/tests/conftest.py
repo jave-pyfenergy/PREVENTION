@@ -1,13 +1,18 @@
 """
 PrevencionApp — Configuración global de pytest.
-Define fixtures compartidas entre tests unitarios, de integración y e2e.
+pytest-asyncio 0.21+ gestiona el event_loop automáticamente (asyncio_mode=auto en pyproject.toml).
 """
-import asyncio
-import pytest
+import sys
+import typing
 
-@pytest.fixture(scope="session")
-def event_loop():
-    """Event loop compartido para toda la sesión de tests."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
+# ── Patch de compatibilidad: Pydantic 2.13.3 en Python 3.14 ──────────────────
+# Pydantic llama typing._eval_type(..., prefer_fwd_module=True) pero
+# Python 3.14rc2 eliminó ese parámetro. Este patch acepta y descarta el kwarg.
+if sys.version_info >= (3, 14):
+    _orig_eval_type = typing._eval_type  # type: ignore[attr-defined]
+
+    def _patched_eval_type(t, globalns, localns, type_params=None, *,
+                           prefer_fwd_module=False, **kwargs):
+        return _orig_eval_type(t, globalns, localns, type_params=type_params, **kwargs)
+
+    typing._eval_type = _patched_eval_type  # type: ignore[attr-defined]

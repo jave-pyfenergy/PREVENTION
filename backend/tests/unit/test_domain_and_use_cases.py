@@ -67,7 +67,7 @@ def formulario_valido(sintomas_alto_riesgo):
 @pytest.fixture
 def mock_ml():
     ml = AsyncMock()
-    ml.predecir.return_value = (0.75, 0.85)
+    ml.predecir.return_value = (0.75, 0.85, {"dolor_articular": 0.35, "rigidez_matutina": 0.25})
     ml.analizar_imagen.return_value = (0.80, 0.90, "https://example.com/gradcam.jpg")
     return ml
 
@@ -103,7 +103,7 @@ class TestFormulario:
 
     def test_formulario_invalido_sin_consentimiento(self, sintomas_alto_riesgo):
         f = Formulario(sintomas=sintomas_alto_riesgo, consentimiento=False)
-        assert f.formulario_valido() if hasattr(f, 'formulario_valido') else not f.validar() is False
+        assert f.validar() is False
 
     def test_formulario_sin_sintomas_invalido(self):
         f = Formulario(consentimiento=True, sintomas=None)
@@ -219,6 +219,7 @@ class TestPredecirInflamacion:
             repositorio=mock_repo,
             hasher=mock_hasher,
             storage=mock_storage,
+            drift_detector=None,
         )
 
     @pytest.fixture
